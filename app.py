@@ -4,7 +4,7 @@ import os
 
 st.set_page_config(page_title="Family Finance Tracker", layout="wide")
 
-st.title("💰 Family Salary, Expense & Debt Tracker")
+st.title("💰 Family Salary, Expense, Transfer & Debt Tracker")
 
 # Data files setup
 DATA_DIR = "data"
@@ -14,13 +14,19 @@ ACCOUNTS_FILE = os.path.join(DATA_DIR, "accounts.csv")
 EXPENSES_FILE = os.path.join(DATA_DIR, "expenses.csv")
 DEBTS_FILE = os.path.join(DATA_DIR, "debts.csv")
 CATEGORIES_FILE = os.path.join(DATA_DIR, "categories.csv")
+TRANSFERS_FILE = os.path.join(DATA_DIR, "transfers.csv")
 
 # Defaults
 if not os.path.exists(CATEGORIES_FILE):
     pd.DataFrame({"Category": ["Food", "Bills", "Transport", "Shopping", "Other"]}).to_csv(CATEGORIES_FILE, index=False)
 
 if not os.path.exists(ACCOUNTS_FILE):
-    pd.DataFrame({"Account Name": ["Cash", "Main Bank Account"], "Balance (LKR)": [0.0, 0.0]}).to_csv(ACCOUNTS_FILE, index=False)
+    # Default wallets & main bank
+    default_accs = pd.DataFrame({
+        "Account Name": ["Indunil's Cash", "Dileema's Cash", "Main Bank Account"], 
+        "Balance (LKR)": [0.0, 0.0, 0.0]
+    })
+    default_accs.to_csv(ACCOUNTS_FILE, index=False)
 
 if not os.path.exists(EXPENSES_FILE):
     pd.DataFrame(columns=["Description", "Amount (LKR)", "Category", "Payment Method"]).to_csv(EXPENSES_FILE, index=False)
@@ -28,15 +34,19 @@ if not os.path.exists(EXPENSES_FILE):
 if not os.path.exists(DEBTS_FILE):
     pd.DataFrame(columns=["Debt Name", "Total Amount", "Paid Amount"]).to_csv(DEBTS_FILE, index=False)
 
+if not os.path.exists(TRANSFERS_FILE):
+    pd.DataFrame(columns=["From", "To", "Amount (LKR)"]).to_csv(TRANSFERS_FILE, index=False)
+
 # Load data
 accounts_df = pd.read_csv(ACCOUNTS_FILE)
 expenses_df = pd.read_csv(EXPENSES_FILE)
 debts_df = pd.read_csv(DEBTS_FILE)
 categories_df = pd.read_csv(CATEGORIES_FILE)
+transfers_df = pd.read_csv(TRANSFERS_FILE)
 
 # Sidebar - Security & Role
 st.sidebar.title("🔐 Access Control")
-role = st.sidebar.selectbox("Select Role", ["User (Add Expense)", "Admin (Manager)"])
+role = st.sidebar.selectbox("Select Role", ["User (Add Expense/Transfer)", "Admin (Manager)"])
 
 admin_logged_in = False
 if role == "Admin (Manager)":
@@ -56,7 +66,7 @@ if admin_logged_in:
     st.sidebar.subheader("Add Income / Salary")
     inc_desc = st.sidebar.text_input("Income Source", value="Salary")
     inc_amount = st.sidebar.number_input("Income Amount (LKR)", min_value=0.0, step=1000.0)
-    inc_account = st.sidebar.selectbox("Deposit to Account", accounts_df["Account Name"].tolist())
+    inc_account = st.sidebar.selectbox("Deposit to Account/Wallet", accounts_df["Account Name"].tolist())
     
     if st.sidebar.button("Add Income"):
         if inc_amount > 0:
@@ -76,6 +86,30 @@ if admin_logged_in:
             st.sidebar.success("Account added!")
             st.rerun()
 
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Manage / Delete Accounts")
+    del_acc = st.sidebar.selectbox("Select Account to Delete", ["--Select--"] + accounts_df["Account Name"].tolist())
+    if st.sidebar.button("Delete Account"):
+        if del_acc != "--Select--":
+            # Don't delete if it's the last one or protect default ones if needed
+            accounts_df = accounts_df[accounts_df["Account Name"] != del_acc]
+            accounts_df.to_csv(ACCOUNTS_FILE, index=False)
+            st.sidebar.success(f"Deleted {del_acc}!")
+            st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("✏️ Direct Balance Edit (Admin)")
+    edit_acc = st.sidebar.selectbox("Select Account to Edit", accounts_df["Account Name"].tolist(), key="edit_acc")
+    current_val = float(accounts_df.loc[accounts_df["Account Name"] == edit_acc, "Balance (LKR)"].values[0])
+    new_balance_val = st.sidebar.number_input("New Balance (LKR)", value=current_val, step=100.0)
+    
+    if st.sidebar.button("Update Balance"):
+        accounts_df.loc[accounts_df["Account Name"] == edit_acc, "Balance (LKR)"] = new_balance_val
+        accounts_df.to_csv(ACCOUNTS_FILE, index=False)
+        st.sidebar.success(f"Balance updated successfully for {edit_acc}!")
+        st.rerun()
+
+    st.sidebar.markdown("---")
     st.sidebar.subheader("Add Category")
     new_cat = st.sidebar.text_input("New Category Name")
     if st.sidebar.button("Add Category"):
@@ -91,7 +125,7 @@ st.sidebar.subheader("Add Expense")
 exp_desc = st.sidebar.text_input("Expense Description")
 exp_amount = st.sidebar.number_input("Expense Amount (LKR)", min_value=0.0, step=100.0)
 exp_cat = st.sidebar.selectbox("Category", categories_df["Category"].tolist())
-exp_payment_acc = st.sidebar.selectbox("Payment Method (From Account)", accounts_df["Account Name"].tolist())
+exp_payment_acc = st.sidebar.selectbox("Payment Method (From Account/Wallet)", accounts_df["Account Name"].tolist())
 
 if st.sidebar.button("Add Expense"):
     if exp_desc and exp_amount > 0:
@@ -108,6 +142,33 @@ if st.sidebar.button("Add Expense"):
         st.rerun()
     else:
         st.sidebar.error("Description saha amount ekak danna.")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔄 Fund Transfer (Bank <-> Cash)")
+trans_from = st.sidebar.selectbox("Transfer From", accounts_df["Account Name"].tolist(), key="t_from")
+trans_to = st.sidebar.selectbox("Transfer To", accounts_df["Account Name"].tolist(), key="t_to")
+trans_amount = st.sidebar.number_input("Transfer Amount (LKR)", min_value=0.0, step=100.0, key="t_amt")
+
+if st.sidebar.button("Transfer Funds"):
+    if trans_from == trans_to:
+        st.sidebar.error("Source and Destination cannot be the same!")
+    elif trans_amount <= 0:
+        st.sidebar.error("Please enter a valid amount.")
+    else:
+        # Deduct from 'From'
+        accounts_df.loc[accounts_df["Account Name"] == trans_from, "Balance (LKR)"] -= trans_amount
+        # Add to 'To'
+        accounts_df.loc[accounts_df["Account Name"] == trans_to, "Balance (LKR)"] += trans_amount
+        
+        accounts_df.to_csv(ACCOUNTS_FILE, index=False)
+        
+        # Save transfer log
+        t_row = pd.DataFrame({"From": [trans_from], "To": [trans_to], "Amount (LKR)": [trans_amount]})
+        transfers_df = pd.concat([transfers_df, t_row], ignore_index=True)
+        transfers_df.to_csv(TRANSFERS_FILE, index=False)
+        
+        st.sidebar.success(f"Successfully transferred LKR {trans_amount:,.2f} from {trans_from} to {trans_to}!")
+        st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add Debt")
@@ -153,3 +214,8 @@ with col_b:
         st.dataframe(d_disp, use_container_width=True)
     else:
         st.info("No debts yet.")
+
+if not transfers_df.empty:
+    st.markdown("---")
+    st.subheader("🔄 Recent Fund Transfers")
+    st.dataframe(transfers_df, use_container_width=True)
