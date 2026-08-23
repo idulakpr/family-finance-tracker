@@ -4,7 +4,7 @@ import os
 
 st.set_page_config(page_title="Family Finance Tracker", layout="wide")
 
-st.title("💰 Family Salary, Expense, Transfer & Reports Tracker")
+st.title("💰 Family Finance Tracker")
 
 # Data files setup
 DATA_DIR = "data"
