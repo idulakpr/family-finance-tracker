@@ -6,7 +6,7 @@ from github import Github
 
 st.set_page_config(page_title="Family Finance Tracker", layout="wide")
 
-st.title("💰 Family Salary, Expense, Transfer & Reports Tracker (GitHub Auto-Sync)")
+st.title("💰 Family Finnace Tracker")
 
 # --- GITHUB SYNC SETUP ---
 try:
