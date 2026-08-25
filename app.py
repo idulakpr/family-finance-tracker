@@ -6,7 +6,7 @@ from github import Github
 
 st.set_page_config(page_title="Family Finance Tracker", layout="wide")
 
-st.title("💰 Family Finance Tracker)")
+st.title("💰 Family Salary, Expense, Transfer & Reports Tracker (GitHub Auto-Sync)")
 
 # --- GITHUB SYNC SETUP ---
 try:
@@ -27,6 +27,7 @@ EXPENSES_FILE = os.path.join(DATA_DIR, "expenses.csv")
 DEBTS_FILE = os.path.join(DATA_DIR, "debts.csv")
 CATEGORIES_FILE = os.path.join(DATA_DIR, "categories.csv")
 TRANSFERS_FILE = os.path.join(DATA_DIR, "transfers.csv")
+INCOMES_FILE = os.path.join(DATA_DIR, "incomes.csv")
 
 def load_csv_from_github(file_path, default_df):
     if use_github:
@@ -34,7 +35,6 @@ def load_csv_from_github(file_path, default_df):
             file_content = repo.get_contents(file_path)
             return pd.read_csv(io.StringIO(file_content.decoded_content.decode("utf-8")))
         except:
-            # If file doesn't exist on GitHub yet, create it
             default_df.to_csv(file_path, index=False)
             repo.create_file(file_path, f"Initialize {file_path}", default_df.to_csv(index=False))
             return default_df
@@ -47,7 +47,6 @@ def load_csv_from_github(file_path, default_df):
 
 def save_csv_to_github(df, file_path, commit_message):
     csv_string = df.to_csv(index=False)
-    # Save locally first
     df.to_csv(file_path, index=False)
     
     if use_github:
@@ -61,21 +60,22 @@ def save_csv_to_github(df, file_path, commit_message):
 default_categories = pd.DataFrame({"Category": ["Food", "Bills", "Transport", "Shopping", "Other"]})
 default_accounts = pd.DataFrame({"Account Name": ["Indunil's Cash", "Dileema's Cash", "Main Bank Account"], "Balance (LKR)": [0.0, 0.0, 0.0]})
 default_expenses = pd.DataFrame(columns=["Date", "Description", "Amount (LKR)", "Category", "Payment Method"])
-default_debts = pd.DataFrame(columns=["Debt Name", "Total Amount", "Paid Amount"])
+default_incomes = pd.DataFrame(columns=["Date", "Income Source", "Amount (LKR)", "Account"])
+default_debts = pd.DataFrame(columns=["Type", "Person/Entity", "Total Amount", "Paid Amount", "Note"])
 default_transfers = pd.DataFrame(columns=["Date", "From", "To", "Amount (LKR)"])
 
 # Load data from GitHub / Local
 categories_df = load_csv_from_github("data/categories.csv", default_categories)
 accounts_df = load_csv_from_github("data/accounts.csv", default_accounts)
 expenses_df = load_csv_from_github("data/expenses.csv", default_expenses)
+incomes_df = load_csv_from_github("data/incomes.csv", default_incomes)
 debts_df = load_csv_from_github("data/debts.csv", default_debts)
 transfers_df = load_csv_from_github("data/transfers.csv", default_transfers)
 
-# Ensure Date column exists
-if "Date" not in expenses_df.columns:
-    expenses_df["Date"] = pd.Timestamp.today().strftime("%Y-%m-%d")
-if "Date" not in transfers_df.columns:
-    transfers_df["Date"] = pd.Timestamp.today().strftime("%Y-%m-%d")
+# Ensure Date columns exist
+for df_obj, col_name in [(expenses_df, "Date"), (transfers_df, "Date"), (incomes_df, "Date")]:
+    if col_name not in df_obj.columns:
+        df_obj[col_name] = pd.Timestamp.today().strftime("%Y-%m-%d")
 
 # Sidebar - Security & Role
 st.sidebar.title("🔐 Access Control")
@@ -97,6 +97,7 @@ if admin_logged_in:
     st.sidebar.header("🛠️ Admin Panel")
     
     st.sidebar.subheader("Add Income / Salary")
+    inc_date = st.sidebar.date_input("Income Date", pd.Timestamp.today(), key="inc_d")
     inc_desc = st.sidebar.text_input("Income Source", value="Salary")
     inc_amount = st.sidebar.number_input("Income Amount (LKR)", min_value=0.0, step=1000.0)
     inc_account = st.sidebar.selectbox("Deposit to Account/Wallet", accounts_df["Account Name"].tolist())
@@ -105,6 +106,16 @@ if admin_logged_in:
         if inc_amount > 0:
             accounts_df.loc[accounts_df["Account Name"] == inc_account, "Balance (LKR)"] += inc_amount
             save_csv_to_github(accounts_df, "data/accounts.csv", "Update accounts after income")
+            
+            new_inc = pd.DataFrame({
+                "Date": [str(inc_date)],
+                "Income Source": [inc_desc],
+                "Amount (LKR)": [inc_amount],
+                "Account": [inc_account]
+            })
+            incomes_df = pd.concat([incomes_df, new_inc], ignore_index=True)
+            save_csv_to_github(incomes_df, "data/incomes.csv", "Add income record")
+            
             st.sidebar.success(f"Added LKR {inc_amount:,.2f} to {inc_account}!")
             st.rerun()
 
@@ -218,74 +229,117 @@ if st.sidebar.button("Transfer Funds"):
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Add Debt")
-debt_name = st.sidebar.text_input("Debt Name")
-debt_total = st.sidebar.number_input("Total Debt", min_value=0.0, step=1000.0)
-debt_paid = st.sidebar.number_input("Paid Amount", min_value=0.0, step=1000.0)
+st.sidebar.subheader("🤝 Debts & Lending Management")
+debt_type = st.sidebar.selectbox("Transaction Type", ["Borrowing (Nayata Gatta)", "Lending (Nayata Dunna)"])
+person_name = st.sidebar.text_input("Person / Institution Name")
+debt_total = st.sidebar.number_input("Total Amount", min_value=0.0, step=1000.0)
+debt_paid = st.sidebar.number_input("Paid / Settled Amount", min_value=0.0, step=1000.0)
+debt_note = st.sidebar.text_input("Note / Description")
 
-if st.sidebar.button("Add Debt"):
-    if debt_name:
-        debts_df = pd.concat([debts_df, pd.DataFrame({"Debt Name": [debt_name], "Total Amount": [debt_total], "Paid Amount": [debt_paid]})], ignore_index=True)
-        save_csv_to_github(debts_df, "data/debts.csv", "Add debt")
-        st.sidebar.success("Debt added!")
+if st.sidebar.button("Add Debt / Lending"):
+    if person_name and debt_total > 0:
+        new_debt = pd.DataFrame({
+            "Type": [debt_type],
+            "Person/Entity": [person_name],
+            "Total Amount": [debt_total],
+            "Paid Amount": [debt_paid],
+            "Note": [debt_note]
+        })
+        debts_df = pd.concat([debts_df, new_debt], ignore_index=True)
+        save_csv_to_github(debts_df, "data/debts.csv", "Add debt or lending")
+        st.sidebar.success("Successfully recorded!")
         st.rerun()
+    else:
+        st.sidebar.error("Please fill name and total amount.")
 
 # --- MAIN DASHBOARD ---
 total_expenses = expenses_df["Amount (LKR)"].sum() if not expenses_df.empty else 0
 total_balance = accounts_df["Balance (LKR)"].sum() if not accounts_df.empty else 0
+total_incomes = incomes_df["Amount (LKR)"].sum() if not incomes_df.empty else 0
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Bank/Cash Balance", f"LKR {total_balance:,.2f}")
-col2.metric("Total Expenses", f"LKR {total_expenses:,.2f}")
-rem_debt = (debts_df["Total Amount"] - debts_df["Paid Amount"]).sum() if not debts_df.empty else 0
-col3.metric("Remaining Debts", f"LKR {rem_debt:,.2f}")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Balance", f"LKR {total_balance:,.2f}")
+col2.metric("Total Incomes", f"LKR {total_incomes:,.2f}")
+col3.metric("Total Expenses", f"LKR {total_expenses:,.2f}")
+
+if not debts_df.empty:
+    borrow_df = debts_df[debts_df["Type"] == "Borrowing (Nayata Gatta)"]
+    lend_df = debts_df[debts_df["Type"] == "Lending (Nayata Dunna)"]
+    rem_borrow = (borrow_df["Total Amount"] - borrow_df["Paid Amount"]).sum() if not borrow_df.empty else 0
+    rem_lend = (lend_df["Total Amount"] - lend_df["Paid Amount"]).sum() if not lend_df.empty else 0
+    col4.metric("Net Debt Position", f"LKR {rem_borrow - rem_lend:,.2f}")
+else:
+    col4.metric("Net Debt Position", "LKR 0.00")
 
 st.markdown("---")
 st.subheader("🏦 Bank Accounts & Cash Wallets Status")
 st.dataframe(accounts_df, use_container_width=True)
 
-# --- REPORTS ---
+# --- REPORTS WITH CUSTOM DATE RANGE ---
 st.markdown("---")
-st.subheader("📊 Expense & Financial Reports")
+st.subheader("📊 Advanced Financial Reports (Custom Date Range & Filters)")
 
-if not expenses_df.empty:
-    expenses_df["Date"] = pd.to_datetime(expenses_df["Date"])
-    report_type = st.selectbox("Select Report View", ["All Time", "Daily", "Weekly", "Monthly"])
+if not expenses_df.empty or not incomes_df.empty:
+    # Convert dates
+    if not expenses_df.empty:
+        expenses_df["Date"] = pd.to_datetime(expenses_df["Date"])
+    if not incomes_df.empty:
+        incomes_df["Date"] = pd.to_datetime(incomes_df["Date"])
+
+    report_mode = st.selectbox("Select Report Category", ["Expenses Report", "Incomes Report"])
     
-    filtered_expenses = expenses_df.copy()
-    if report_type == "Daily":
-        selected_date = st.date_input("Select Date", pd.Timestamp.today())
-        filtered_expenses = expenses_df[expenses_df["Date"].dt.date == selected_date]
-    elif report_type == "Weekly":
-        year = st.number_input("Year", min_value=2024, max_value=2030, value=pd.Timestamp.today().year)
-        week_num = st.number_input("Week Number", min_value=1, max_value=52, value=int(pd.Timestamp.today().strftime("%U")))
-        filtered_expenses = expenses_df[(expenses_df["Date"].dt.year == year) & (expenses_df["Date"].dt.isocalendar().week == week_num)]
-    elif report_type == "Monthly":
-        month_list = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-        sel_month_name = st.selectbox("Select Month", month_list, index=pd.Timestamp.today().month - 1)
-        sel_month_num = month_list.index(sel_month_name) + 1
-        sel_year = st.number_input("Year", min_value=2024, max_value=2030, value=pd.Timestamp.today().year, key="m_year")
-        filtered_expenses = expenses_df[(expenses_df["Date"].dt.month == sel_month_num) & (expenses_df["Date"].dt.year == sel_year)]
+    st.write("### 📅 Select Custom Date Range")
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        start_date = st.date_input("Start Date", pd.Timestamp.today() - pd.Timedelta(days=30))
+    with col_d2:
+        end_date = st.date_input("End Date", pd.Timestamp.today())
 
-    st.write(f"Showing expenses for: **{report_type}**")
-    if not filtered_expenses.empty:
-        disp_exp = filtered_expenses.copy()
-        disp_exp["Date"] = disp_exp["Date"].dt.strftime("%Y-%m-%d")
-        st.dataframe(disp_exp, use_container_width=True)
-        
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            st.metric(f"Total Expenses ({report_type})", f"LKR {disp_exp['Amount (LKR)'].sum():,.2f}")
-        with col_r2:
-            st.download_button(f"📥 Download {report_type} Expenses CSV", disp_exp.to_csv(index=False), f"expenses_{report_type.lower()}.csv", "text/csv")
-        
-        st.subheader(f"📈 Breakdown by Category ({report_type})")
-        cat_breakdown = disp_exp.groupby("Category")["Amount (LKR)"].sum()
-        st.bar_chart(cat_breakdown)
-    else:
-        st.info(f"No expenses found for this {report_type.lower()} filter.")
+    if report_mode == "Expenses Report":
+        if not expenses_df.empty:
+            filtered_exp = expenses_df[(expenses_df["Date"].dt.date >= start_date) & (expenses_df["Date"].dt.date <= end_date)]
+            st.write(f"Showing Expenses from **{start_date}** to **{end_date}**")
+            
+            if not filtered_exp.empty:
+                disp_exp = filtered_exp.copy()
+                disp_exp["Date"] = disp_exp["Date"].dt.strftime("%Y-%m-%d")
+                st.dataframe(disp_exp, use_container_width=True)
+                
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    st.metric("Total Expenses (Selected Range)", f"LKR {disp_exp['Amount (LKR)'].sum():,.2f}")
+                with col_r2:
+                    st.download_button("📥 Download Filtered Expenses CSV", disp_exp.to_csv(index=False), "filtered_expenses.csv", "text/csv")
+                
+                st.subheader("📈 Breakdown by Category")
+                cat_breakdown = disp_exp.groupby("Category")["Amount (LKR)"].sum()
+                st.bar_chart(cat_breakdown)
+            else:
+                st.info("No expenses found for this date range.")
+        else:
+            st.info("No expense data available.")
+
+    elif report_mode == "Incomes Report":
+        if not incomes_df.empty:
+            filtered_inc = incomes_df[(incomes_df["Date"].dt.date >= start_date) & (incomes_df["Date"].dt.date <= end_date)]
+            st.write(f"Showing Incomes from **{start_date}** to **{end_date}**")
+            
+            if not filtered_inc.empty:
+                disp_inc = filtered_inc.copy()
+                disp_inc["Date"] = disp_inc["Date"].dt.strftime("%Y-%m-%d")
+                st.dataframe(disp_inc, use_container_width=True)
+                
+                col_i1, col_i2 = st.columns(2)
+                with col_i1:
+                    st.metric("Total Incomes (Selected Range)", f"LKR {disp_inc['Amount (LKR)'].sum():,.2f}")
+                with col_i2:
+                    st.download_button("📥 Download Filtered Incomes CSV", disp_inc.to_csv(index=False), "filtered_incomes.csv", "text/csv")
+            else:
+                st.info("No incomes found for this date range.")
+        else:
+            st.info("No income data available.")
 else:
-    st.info("No expense data available for reports yet.")
+    st.info("No financial data available yet.")
 
 st.markdown("---")
 col_a, col_b = st.columns(2)
@@ -299,16 +353,15 @@ with col_a:
         st.info("No expenses yet.")
 
 with col_b:
-    st.subheader("💳 Debts Status")
+    st.subheader("🤝 Debts & Lending Tracking")
     if not debts_df.empty:
         d_disp = debts_df.copy()
-        d_disp["Remaining"] = d_disp["Total Amount"] - d_disp["Paid Amount"]
+        d_disp["Remaining Balance"] = d_disp["Total Amount"] - d_disp["Paid Amount"]
         st.dataframe(d_disp, use_container_width=True)
     else:
-        st.info("No debts yet.")
+        st.info("No debts or lendings recorded yet.")
 
 if not transfers_df.empty:
     st.markdown("---")
     st.subheader("🔄 Recent Fund Transfers")
     st.dataframe(transfers_df, use_container_width=True)
-
