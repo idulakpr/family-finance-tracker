@@ -129,11 +129,8 @@ if admin_logged_in:
             old_amt = float(incomes_df.loc[sel_inc_idx, "Amount (LKR)"])
             old_acc = incomes_df.loc[sel_inc_idx, "Account"]
             
-            # Revert old balance effect
             if old_acc in accounts_df["Account Name"].values:
                 accounts_df.loc[accounts_df["Account Name"] == old_acc, "Balance (LKR)"] -= old_amt
-            
-            # Apply new balance effect
             accounts_df.loc[accounts_df["Account Name"] == edit_inc_acc, "Balance (LKR)"] += edit_inc_amount
             
             incomes_df.loc[sel_inc_idx, "Amount (LKR)"] = edit_inc_amount
@@ -170,11 +167,8 @@ if admin_logged_in:
             old_amt = float(expenses_df.loc[sel_exp_idx, "Amount (LKR)"])
             old_acc = expenses_df.loc[sel_exp_idx, "Payment Method"]
             
-            # Revert old balance effect (add back)
             if old_acc in accounts_df["Account Name"].values:
                 accounts_df.loc[accounts_df["Account Name"] == old_acc, "Balance (LKR)"] += old_amt
-            
-            # Apply new balance effect (deduct)
             accounts_df.loc[accounts_df["Account Name"] == edit_exp_acc, "Balance (LKR)"] -= edit_exp_amt
             
             expenses_df.loc[sel_exp_idx, "Amount (LKR)"] = edit_exp_amt
@@ -213,8 +207,6 @@ if admin_logged_in:
                 debts_df.loc[sel_debt_idx, "Paid Amount"] += add_paid
                 d_type = debts_df.loc[sel_debt_idx, "Type"]
                 
-                # If Borrowing (Nayak gewwa): Money goes OUT from account -> Balance decreases
-                # If Lending (Nayakin salli labuna): Money comes IN to account -> Balance increases
                 if d_type == "Borrowing (Nayata Gatta)":
                     accounts_df.loc[accounts_df["Account Name"] == settle_acc, "Balance (LKR)"] -= add_paid
                 else:
@@ -226,7 +218,7 @@ if admin_logged_in:
                 st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Add Bank Account / Wallet")
+    st.sidebar.subheader("🏦 Manage Accounts & Wallets")
     new_acc = st.sidebar.text_input("New Account Name")
     init_bal = st.sidebar.number_input("Initial Balance", min_value=0.0, step=1000.0)
     if st.sidebar.button("Add Account"):
@@ -235,6 +227,35 @@ if admin_logged_in:
             save_csv_to_github(accounts_df, "data/accounts.csv", "Add new account")
             st.sidebar.success("Account added!")
             st.rerun()
+
+    # Edit / Delete Accounts
+    if not accounts_df.empty:
+        st.sidebar.markdown("##### Edit / Delete Existing Account")
+        sel_acc_edit = st.sidebar.selectbox("Select Account", accounts_df["Account Name"].tolist(), key="sel_acc_edit")
+        curr_acc_bal = float(accounts_df.loc[accounts_df["Account Name"] == sel_acc_edit, "Balance (LKR)"].values[0])
+        
+        new_acc_name = st.sidebar.text_input("Rename Account", value=sel_acc_edit, key="ren_acc")
+        new_acc_bal = st.sidebar.number_input("Modify Balance", value=curr_acc_bal, step=100.0, key="mod_bal")
+        
+        col_ac1, col_ac2 = st.sidebar.columns(2)
+        if col_ac1.button("Update Account"):
+            if new_acc_name and (new_acc_name == sel_acc_edit or new_acc_name not in accounts_df["Account Name"].values):
+                accounts_df.loc[accounts_df["Account Name"] == sel_acc_edit, "Account Name"] = new_acc_name
+                accounts_df.loc[accounts_df["Account Name"] == new_acc_name, "Balance (LKR)"] = new_acc_bal
+                save_csv_to_github(accounts_df, "data/accounts.csv", "Update account details")
+                st.sidebar.success("Account updated successfully!")
+                st.rerun()
+            else:
+                st.sidebar.error("Invalid name or already exists.")
+                
+        if col_ac2.button("Delete Account"):
+            if len(accounts_df) > 1:
+                accounts_df = accounts_df[accounts_df["Account Name"] != sel_acc_edit].reset_index(drop=True)
+                save_csv_to_github(accounts_df, "data/accounts.csv", "Delete account")
+                st.sidebar.success(f"Deleted {sel_acc_edit}!")
+                st.rerun()
+            else:
+                st.sidebar.error("You must keep at least one account!")
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Manage Categories")
@@ -326,9 +347,6 @@ if st.sidebar.button("Add Debt / Lending"):
         debts_df = pd.concat([debts_df, new_debt], ignore_index=True)
         save_csv_to_github(debts_df, "data/debts.csv", "Add debt or lending")
         
-        # Balance updates when adding debt:
-        # Borrowing (Nayata gatta) -> Salli enawa -> Account balance increases
-        # Lending (Nayata dunna) -> Salli yanawa -> Account balance decreases
         net_initial_impact = debt_total - debt_paid
         if debt_type == "Borrowing (Nayata Gatta)":
             accounts_df.loc[accounts_df["Account Name"] == debt_account, "Balance (LKR)"] += net_initial_impact
@@ -364,6 +382,32 @@ else:
 st.markdown("---")
 st.subheader("🏦 Bank Accounts & Cash Wallets Status")
 st.dataframe(accounts_df, use_container_width=True)
+
+# --- ALL TRANSACTIONS HISTORY & DOWNLOAD ---
+st.markdown("---")
+st.subheader("📜 All Transactions History (Incomes, Expenses, Transfers, Debts)")
+
+all_tx_list = []
+if not incomes_df.empty:
+    for _, r in incomes_df.iterrows():
+        all_tx_list.append({"Date": r["Date"], "Type": "Income", "Details": r["Income Source"], "Amount (LKR)": r["Amount (LKR)"], "Account/Method": r["Account"]})
+if not expenses_df.empty:
+    for _, r in expenses_df.iterrows():
+        all_tx_list.append({"Date": r["Date"], "Type": "Expense", "Details": f"{r['Description']} ({r['Category']})", "Amount (LKR)": r["Amount (LKR)"], "Account/Method": r["Payment Method"]})
+if not transfers_df.empty:
+    for _, r in transfers_df.iterrows():
+        all_tx_list.append({"Date": r["Date"], "Type": "Transfer", "Details": f"From {r['From']} To {r['To']}", "Amount (LKR)": r["Amount (LKR)"], "Account/Method": f"{r['From']} -> {r['To']}"})
+if not debts_df.empty:
+    for _, r in debts_df.iterrows():
+        all_tx_list.append({"Date": str(pd.Timestamp.today().strftime("%Y-%m-%d")), "Type": r["Type"], "Details": f"{r['Person/Entity']} - {r['Note']}", "Amount (LKR)": r["Total Amount"], "Account/Method": r["Account"]})
+
+if all_tx_list:
+    all_tx_df = pd.DataFrame(all_tx_list)
+    all_tx_df = all_tx_df.sort_values(by="Date", ascending=False).reset_index(drop=True)
+    st.dataframe(all_tx_df, use_container_width=True)
+    st.download_button("📥 Download All Transactions CSV", all_tx_df.to_csv(index=False), "all_transactions.csv", "text/csv")
+else:
+    st.info("No transactions recorded yet.")
 
 # --- REPORTS WITH CUSTOM DATE RANGE ---
 st.markdown("---")
