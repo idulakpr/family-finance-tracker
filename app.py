@@ -6,7 +6,7 @@ from github import Github
 
 st.set_page_config(page_title="Family Finance Tracker", layout="wide")
 
-st.title("💰 Family Finance Tracker")
+st.title("💰 Family Finance Tracke")
 
 # --- GITHUB SYNC SETUP ---
 try:
@@ -192,17 +192,41 @@ if admin_logged_in:
             st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🤝 Settle / Update Debts & Lending")
+    st.sidebar.subheader("🔄 Delete Fund Transfers")
+    if not transfers_df.empty:
+        trans_indices = list(range(len(transfers_df)))
+        sel_trans_idx = st.sidebar.selectbox("Select Transfer to Delete", trans_indices, format_func=lambda x: f"{transfers_df.loc[x, 'Date']} | {transfers_df.loc[x, 'From']} ➡️ {transfers_df.loc[x, 'To']} | LKR {transfers_df.loc[x, 'Amount (LKR)']:,.2f}")
+        
+        if st.sidebar.button("Delete Transfer"):
+            tr_amt = float(transfers_df.loc[sel_trans_idx, "Amount (LKR)"])
+            tr_from = transfers_df.loc[sel_trans_idx, "From"]
+            tr_to = transfers_df.loc[sel_trans_idx, "To"]
+            
+            # Reverse transfer effect on accounts
+            if tr_from in accounts_df["Account Name"].values:
+                accounts_df.loc[accounts_df["Account Name"] == tr_from, "Balance (LKR)"] += tr_amt
+            if tr_to in accounts_df["Account Name"].values:
+                accounts_df.loc[accounts_df["Account Name"] == tr_to, "Balance (LKR)"] -= tr_amt
+                
+            transfers_df = transfers_df.drop(sel_trans_idx).reset_index(drop=True)
+            save_csv_to_github(accounts_df, "data/accounts.csv", "Update accounts after transfer deletion")
+            save_csv_to_github(transfers_df, "data/transfers.csv", "Delete transfer record")
+            st.sidebar.success("Transfer deleted and balances reverted!")
+            st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🤝 Settle / Delete Debts & Lending")
     if not debts_df.empty:
         debt_indices = list(range(len(debts_df)))
-        sel_debt_idx = st.sidebar.selectbox("Select Debt/Lending to Settle", debt_indices, format_func=lambda x: f"{debts_df.loc[x, 'Type']} | {debts_df.loc[x, 'Person/Entity']} | Total: {debts_df.loc[x, 'Total Amount']} | Paid: {debts_df.loc[x, 'Paid Amount']}")
+        sel_debt_idx = st.sidebar.selectbox("Select Debt/Lending Record", debt_indices, format_func=lambda x: f"{debts_df.loc[x, 'Type']} | {debts_df.loc[x, 'Person/Entity']} | Total: {debts_df.loc[x, 'Total Amount']} | Paid: {debts_df.loc[x, 'Paid Amount']}")
         
         curr_paid = float(debts_df.loc[sel_debt_idx, "Paid Amount"])
         tot_amt = float(debts_df.loc[sel_debt_idx, "Total Amount"])
         add_paid = st.sidebar.number_input("Add Settlement / Payment Amount (LKR)", min_value=0.0, max_value=tot_amt - curr_paid if tot_amt >= curr_paid else 0.0, step=100.0)
         settle_acc = st.sidebar.selectbox("Account used for Settlement/Receipt", accounts_df["Account Name"].tolist(), key="settle_acc")
         
-        if st.sidebar.button("Update Paid Status"):
+        col_d1, col_d2 = st.sidebar.columns(2)
+        if col_d1.button("Update Paid Status"):
             if add_paid > 0:
                 debts_df.loc[sel_debt_idx, "Paid Amount"] += add_paid
                 d_type = debts_df.loc[sel_debt_idx, "Type"]
@@ -216,6 +240,33 @@ if admin_logged_in:
                 save_csv_to_github(debts_df, "data/debts.csv", "Update debt paid amount")
                 st.sidebar.success(f"Successfully updated debt payment of LKR {add_paid:,.2f}!")
                 st.rerun()
+                
+        if col_d2.button("Delete Debt Record"):
+            d_type = debts_df.loc[sel_debt_idx, "Type"]
+            d_tot = float(debts_df.loc[sel_debt_idx, "Total Amount"])
+            d_paid = float(debts_df.loc[sel_debt_idx, "Paid Amount"])
+            d_acc = debts_df.loc[sel_debt_idx, "Account"]
+            
+            # Reverse initial net impact & settlements on account balance
+            # Borrowing: initially balance increased by (d_tot - d_paid). If deleted, decrease balance by that amount. Also if any paid amounts were settled from accounts, revert them.
+            net_initial_impact = d_tot - d_paid
+            if d_type == "Borrowing (Nayata Gatta)":
+                if d_acc in accounts_df["Account Name"].values:
+                    accounts_df.loc[accounts_df["Account Name"] == d_acc, "Balance (LKR)"] -= net_initial_impact
+                # Revert paid amounts if they were deducted from settle accounts (simplified: add back total paid if settled)
+                if d_paid > 0 and d_acc in accounts_df["Account Name"].values:
+                    accounts_df.loc[accounts_df["Account Name"] == d_acc, "Balance (LKR)"] += d_paid
+            else: # Lending
+                if d_acc in accounts_df["Account Name"].values:
+                    accounts_df.loc[accounts_df["Account Name"] == d_acc, "Balance (LKR)"] += net_initial_impact
+                if d_paid > 0 and d_acc in accounts_df["Account Name"].values:
+                    accounts_df.loc[accounts_df["Account Name"] == d_acc, "Balance (LKR)"] -= d_paid
+            
+            debts_df = debts_df.drop(sel_debt_idx).reset_index(drop=True)
+            save_csv_to_github(accounts_df, "data/accounts.csv", "Update accounts after debt deletion")
+            save_csv_to_github(debts_df, "data/debts.csv", "Delete debt record")
+            st.sidebar.success("Debt record deleted and balances reverted!")
+            st.rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🏦 Manage Accounts & Wallets")
@@ -228,7 +279,6 @@ if admin_logged_in:
             st.sidebar.success("Account added!")
             st.rerun()
 
-    # Edit / Delete Accounts
     if not accounts_df.empty:
         st.sidebar.markdown("##### Edit / Delete Existing Account")
         sel_acc_edit = st.sidebar.selectbox("Select Account", accounts_df["Account Name"].tolist(), key="sel_acc_edit")
@@ -375,7 +425,8 @@ if not debts_df.empty:
     lend_df = debts_df[debts_df["Type"] == "Lending (Nayata Dunna)"]
     rem_borrow = (borrow_df["Total Amount"] - borrow_df["Paid Amount"]).sum() if not borrow_df.empty else 0
     rem_lend = (lend_df["Total Amount"] - lend_df["Paid Amount"]).sum() if not lend_df.empty else 0
-    col4.metric("Net Debt Position", f"LKR {rem_borrow - rem_lend:,.2f}")
+    net_debt_pos = rem_lend - rem_borrow  # Lending (+) minus Borrowing (-)
+    col4.metric("Net Debt Position", f"LKR {net_debt_pos:,.2f}", delta=f"Lending: +{rem_lend:,.2f} | Borrowing: -{rem_borrow:,.2f}")
 else:
     col4.metric("Net Debt Position", "LKR 0.00")
 
@@ -385,27 +436,35 @@ st.dataframe(accounts_df, use_container_width=True)
 
 # --- ALL TRANSACTIONS HISTORY & DOWNLOAD ---
 st.markdown("---")
-st.subheader("📜 All Transactions History (Incomes, Expenses, Transfers, Debts)")
+st.subheader("📜 All Transactions History (Incomes (+), Expenses (-), Transfers, Debts)")
 
 all_tx_list = []
 if not incomes_df.empty:
     for _, r in incomes_df.iterrows():
-        all_tx_list.append({"Date": r["Date"], "Type": "Income", "Details": r["Income Source"], "Amount (LKR)": r["Amount (LKR)"], "Account/Method": r["Account"]})
+        all_tx_list.append({"Date": r["Date"], "Type": "Income", "Details": r["Income Source"], "Amount (LKR)": f"+ {r['Amount (LKR)']:,.2f}", "RawAmount": r["Amount (LKR)"], "Account/Method": r["Account"]})
 if not expenses_df.empty:
     for _, r in expenses_df.iterrows():
-        all_tx_list.append({"Date": r["Date"], "Type": "Expense", "Details": f"{r['Description']} ({r['Category']})", "Amount (LKR)": r["Amount (LKR)"], "Account/Method": r["Payment Method"]})
+        all_tx_list.append({"Date": r["Date"], "Type": "Expense", "Details": f"{r['Description']} ({r['Category']})", "Amount (LKR)": f"- {r['Amount (LKR)']:,.2f}", "RawAmount": -r["Amount (LKR)"], "Account/Method": r["Payment Method"]})
 if not transfers_df.empty:
     for _, r in transfers_df.iterrows():
-        all_tx_list.append({"Date": r["Date"], "Type": "Transfer", "Details": f"From {r['From']} To {r['To']}", "Amount (LKR)": r["Amount (LKR)"], "Account/Method": f"{r['From']} -> {r['To']}"})
+        all_tx_list.append({"Date": r["Date"], "Type": "Transfer", "Details": f"From {r['From']} To {r['To']}", "Amount (LKR)": f"{r['Amount (LKR)']:,.2f}", "RawAmount": 0.0, "Account/Method": f"{r['From']} -> {r['To']}"})
 if not debts_df.empty:
     for _, r in debts_df.iterrows():
-        all_tx_list.append({"Date": str(pd.Timestamp.today().strftime("%Y-%m-%d")), "Type": r["Type"], "Details": f"{r['Person/Entity']} - {r['Note']}", "Amount (LKR)": r["Total Amount"], "Account/Method": r["Account"]})
+        if r["Type"] == "Lending (Nayata Dunna)":
+            amt_str = f"+ {r['Total Amount']:,.2f} (Lending)"
+            raw_amt = r["Total Amount"]
+        else:
+            amt_str = f"- {r['Total Amount']:,.2f} (Borrowing)"
+            raw_amt = -r["Total Amount"]
+        all_tx_list.append({"Date": str(pd.Timestamp.today().strftime("%Y-%m-%d")), "Type": r["Type"], "Details": f"{r['Person/Entity']} - {r['Note']}", "Amount (LKR)": amt_str, "RawAmount": raw_amt, "Account/Method": r["Account"]})
 
 if all_tx_list:
     all_tx_df = pd.DataFrame(all_tx_list)
     all_tx_df = all_tx_df.sort_values(by="Date", ascending=False).reset_index(drop=True)
-    st.dataframe(all_tx_df, use_container_width=True)
-    st.download_button("📥 Download All Transactions CSV", all_tx_df.to_csv(index=False), "all_transactions.csv", "text/csv")
+    
+    # Display table without raw sorting column
+    st.dataframe(all_tx_df[["Date", "Type", "Details", "Amount (LKR)", "Account/Method"]], use_container_width=True)
+    st.download_button("📥 Download All Transactions CSV", all_tx_df[["Date", "Type", "Details", "Amount (LKR)", "Account/Method"]].to_csv(index=False), "all_transactions.csv", "text/csv")
 else:
     st.info("No transactions recorded yet.")
 
